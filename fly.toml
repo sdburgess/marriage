@@ -1,0 +1,29 @@
+# fly.io app config. Update `app` to your chosen name before `fly launch`.
+app = "cupid-watcher"
+primary_region = "ewr"   # Newark -- close to NYC, low latency to city site
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  CONFIG_PATH = "/data/config.yaml"
+  STATE_PATH  = "/data/state.json"
+  LOG_LEVEL   = "INFO"
+
+# Persistent volume so state.json (booked confirmations, seen slots) and
+# the user-edited config.yaml survive deploys and restarts.
+[[mounts]]
+  source      = "cupid_data"
+  destination = "/data"
+
+# This is a long-running worker, not an HTTP service. Keep one instance
+# running, no auto-stop, no auto-scale.
+[[vm]]
+  cpu_kind = "shared"
+  cpus     = 1
+  memory   = "512mb"
+
+[deploy]
+  strategy = "immediate"
+
+# No [[services]] block on purpose -- we don't expose any port.

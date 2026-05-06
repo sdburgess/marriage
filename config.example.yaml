@@ -1,0 +1,60 @@
+# Copy to config.yaml and fill in. Do NOT commit config.yaml -- it has PII.
+#
+# Use case: you already have your license appointment, you have a specific
+# ceremony date in mind that's currently booked by someone else, and you
+# want to grab it the moment it cancels. The defaults below set up
+# constant cancellation-watch polling.
+
+targets:
+  - kind: ceremony
+    mode: in_person
+    boroughs: [Manhattan]                  # add more boroughs to broaden
+    # The watcher considers anything in this window. Even with a preferred
+    # date, keep a reasonable window so you also see fallback slots.
+    earliest_date: 2026-06-08
+    latest_date: 2026-08-15
+    earliest_time: "09:30"                 # local NYC time, HH:MM 24h
+    latest_time:   "14:30"
+    weekdays: [Mon, Tue, Wed, Thu, Fri]
+
+    # The date you actually want. If anyone cancels on this date, the
+    # booker will try to grab it first.
+    preferred_date: 2026-07-11
+    preferred_time: "11:30"                # optional, picks closest-time slot
+    # Set true to ONLY book preferred_date. If false, the booker takes
+    # any matching slot if your preferred date stays unavailable.
+    preferred_only: true
+
+    auto_book: true
+
+    # REQUIRED. The confirmation number from your license appointment.
+    license_number: "FILL_ME_IN"
+
+# The ceremony page mostly auto-fills from your license record, so the
+# scraper only needs light contact info. Fill in carefully.
+applicants:
+  partner_a:
+    first_name: ""
+    last_name: ""
+    email: ""
+    phone: "+15555550101"
+
+  partner_b:
+    first_name: ""
+    last_name: ""
+    email: ""
+    phone: "+15555550102"
+
+# Who to ping when slots show up or a booking is made
+notifications:
+  sms_to:   ["+15555550101", "+15555550102"]   # both phones
+  email_to: ["", ""]
+  slack_enabled: true
+
+# Cancellation-watch polling
+polling:
+  constant_mode: true              # poll all the time, ignore release windows
+  base_interval_seconds: 45        # ~one check per 45s
+  jitter_seconds: 10               # +/- 10s random jitter so we're not exactly periodic
+  burst_interval_seconds: 5        # only used if constant_mode=false
+  release_windows: []              # not used in constant_mode

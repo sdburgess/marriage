@@ -1,2 +1,13 @@
 main
 deployment.zip
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+.env.local
+config.yaml
+state.json
+*.log
+playwright-report/
+.pytest_cache/
