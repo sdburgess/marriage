@@ -34,100 +34,215 @@ The original 2021 Go Lambda lives in `legacy/` for reference.
 - **State:** `state.json` remembers slots we've already announced (so we
   don't spam) and bookings we've already made (so we don't double-book).
 
-## Setup
+## End-to-end setup
 
-### 1. Local dev
+Plan ~60-90 minutes. You'll spend ~$10/mo total: Twilio ~$1 + fly.io ~$3-5
++ Resend free tier.
+
+### 1. Clone and install
 
 Requires Python 3.11+.
 
 ```sh
-python -m venv .venv && source .venv/bin/activate
+git clone https://github.com/sdburgess/marriage.git
+cd marriage
+git checkout claude/nyc-marriage-appointment-scraper-8GweX
+
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e .
 playwright install chromium
-
-cp config.example.yaml config.yaml
-cp .env.example .env
-# Edit both. config.yaml has PII, .env has secrets. Both are gitignored.
 ```
 
-### 2. Lock in selectors with a recording session
+### 2. Twilio (SMS)
 
-The selectors in `cupid/scraper.py` are educated starting guesses; Salesforce
-sites occasionally rename roles/labels. Run once with a real browser before
-trusting auto-book:
+1. Sign up at <https://www.twilio.com/try-twilio>. Trial gives ~$15 credit.
+2. **Buy a number**: Console &rarr; Phone Numbers &rarr; Buy a number &rarr;
+   any US number with SMS (~$1/mo).
+3. **Verify recipient phones** (trial only): Console &rarr; Phone Numbers
+   &rarr; Verified Caller IDs &rarr; add both phones. Each gets a code text.
+4. From the Console homepage copy:
+   - **Account SID** &rarr; `TWILIO_ACCOUNT_SID`
+   - **Auth Token** &rarr; `TWILIO_AUTH_TOKEN`
+   - The number you bought &rarr; `TWILIO_FROM_NUMBER` (E.164, e.g. `+12125550100`)
+
+### 3. Slack app (notifications + Book/Skip buttons)
+
+1. Go to <https://api.slack.com/apps?new_app=1> &rarr; **Create New App**
+   &rarr; **From scratch**. Name it (e.g. `cupid-watcher`), pick the
+   workspace you and your fianc&eacute; share.
+2. Sidebar &rarr; **OAuth & Permissions** &rarr; under **Bot Token Scopes** add:
+   - `chat:write`
+   - `chat:write.public`
+3. Scroll up &rarr; **Install to <Workspace>** &rarr; approve.
+4. Copy the **Bot User OAuth Token** (starts `xoxb-`) &rarr; `SLACK_BOT_TOKEN`.
+5. **Basic Information** &rarr; **Signing Secret** &rarr; copy &rarr; `SLACK_SIGNING_SECRET`.
+6. In Slack: create a channel (e.g. `#wedding-bot`), invite your fianc&eacute;,
+   type `/invite @cupid-watcher`. Right-click channel &rarr; **View channel
+   details** &rarr; bottom &rarr; copy **Channel ID** &rarr; `SLACK_CHANNEL_ID`.
+7. Leave Interactivity off for now -- we'll come back in step 10 when we
+   have a public URL.
+
+### 4. Email (Resend)
+
+1. Sign up at <https://resend.com>. Free tier is 3,000/mo.
+2. **Domains** &rarr; add and verify a domain you own (10 min DNS), or
+   skip and use `onboarding@resend.dev`.
+3. **API Keys** &rarr; create &rarr; copy the value.
+4. Set:
+   - `SMTP_HOST=smtp.resend.com`
+   - `SMTP_PORT=587`
+   - `SMTP_USERNAME=resend`
+   - `SMTP_PASSWORD=<the API key>`
+   - `SMTP_FROM=onboarding@resend.dev` (or your verified address)
+
+(Gmail SMTP also works -- `smtp.gmail.com` with an App Password.)
+
+### 5. Fill in `.env`
+
+```sh
+cp .env.example .env
+```
+
+Paste everything from steps 2-4 plus:
+
+```
+WEB_USERNAME=cupid
+WEB_PASSWORD=<pick a strong random one -- gates the dashboard>
+```
+
+Leave `TWOCAPTCHA_API_KEY=` empty unless/until you actually hit a CAPTCHA.
+
+### 6. Fill in `config.yaml`
+
+```sh
+cp config.example.yaml config.yaml
+```
+
+Edit:
+
+- `targets[0].earliest_date` / `latest_date` -- acceptable ceremony window
+- `targets[0].preferred_date` -- the date you actually want
+- `targets[0].preferred_time` -- optional preferred time
+- `targets[0].preferred_only: true` if you'll only accept preferred_date
+- `targets[0].license_number` -- the confirmation # from your already-booked license
+- `applicants.partner_a/b` -- first name, last name, email, phone for each
+- `notifications.sms_to` -- both phones in E.164 format
+- `notifications.email_to` -- both emails
+
+`config.yaml` is gitignored. Don't commit it.
+
+### 7. Lock in scraper selectors (one-time, ~15 min)
+
+The selectors in `cupid/scraper.py` and `cupid/booker.py` are educated
+guesses. Run a recording session to confirm them against the live site:
 
 ```sh
 python -m cupid record --kind ceremony
 ```
 
-A Chromium window opens. Walk through the booking flow yourself. The script
-prints the role/label of every element you click and every XHR the page makes.
-Update `SELECTORS` in `cupid/scraper.py` and `SCHEMA_BY_KIND` in
-`cupid/booker.py` to match what you saw.
+Chromium opens at `clerkscheduler.cityofnewyork.us`. Click through:
+**In-Person Marriage Ceremony Appointment** &rarr; **Manhattan** &rarr; a
+future date &rarr; a time &rarr; start the form. The script logs every
+clicked element and every XHR. If button labels or form-field labels
+differ from what's in `SELECTORS` (scraper.py) or `SCHEMA_BY_KIND`
+(booker.py), update them and commit your changes locally.
 
-### 3. Test notifications
+### 8. Test locally
 
 ```sh
+# Verify SMS + email + Slack arrive
 python -m cupid notify-test
-```
 
-You should get an SMS, email, and (if configured) Slack message saying the
-test went through.
-
-### 4. Single-shot poll
-
-To verify watching works without committing to the loop:
-
-```sh
+# Run one polling tick and exit
 python -m cupid once
-```
 
-### 5. Run the loop
-
-```sh
+# Run the loop + dashboard locally
 python -m cupid run
 ```
 
-## Deploy to fly.io
+Open <http://localhost:8080>, basic-auth with `WEB_USERNAME`/`WEB_PASSWORD`,
+confirm the dashboard loads. Hit Pause/Resume to verify. Ctrl-C when
+satisfied.
+
+### 9. Deploy to fly.io
 
 ```sh
-# One-time
-fly launch --no-deploy --copy-config           # accept name "cupid-watcher" or pick your own
+# Install fly CLI
+brew install flyctl                 # Mac
+# or: curl -L https://fly.io/install.sh | sh   # Linux
+
+fly auth signup                     # or: fly auth login
+
+# Set up the app. Pick a unique name -- "cupid-watcher" probably collides.
+# Region: ewr (Newark). Postgres/Redis: no.
+fly launch --no-deploy --copy-config
+
+# 1 GB volume in the same region
 fly volumes create cupid_data --size 1 --region ewr
 
-# Push secrets (env, never committed). Includes WEB_USERNAME/WEB_PASSWORD
-# for the dashboard and SLACK_SIGNING_SECRET for the Slack webhook.
-fly secrets set $(grep -v '^#' .env | xargs)
+# Push every secret from .env
+fly secrets set $(grep -v '^#' .env | grep -v '^$' | xargs)
 
-# Upload your config.yaml into the persistent volume
+# Upload config.yaml to the persistent volume
 fly ssh sftp shell
-# > put config.yaml /data/config.yaml
-# > exit
+# In the sftp prompt:
+# put config.yaml /data/config.yaml
+# exit
 
+# Deploy
 fly deploy
 fly logs
 ```
 
-State (`state.json`) and `config.yaml` live on the volume so deploys don't
-wipe them. The dashboard is at `https://<app>.fly.dev/` (basic auth with
-the `WEB_USERNAME` / `WEB_PASSWORD` you set).
+You should see structured JSON, the scheduler starting, and FastAPI
+binding to 8080. Note the public URL `https://<your-app>.fly.dev` and
+verify the dashboard loads in a browser.
 
-### Slack interactivity setup
+### 10. Wire Slack interactivity (now that you have a public URL)
 
-For Book/Skip buttons to work, the Slack app needs Interactivity enabled:
+1. Back at <https://api.slack.com/apps> &rarr; your app &rarr;
+   **Interactivity & Shortcuts**.
+2. Toggle **Interactivity** on.
+3. **Request URL**: `https://<your-app>.fly.dev/slack/actions`
+4. Save. Slack pings the URL; the HMAC check passes and verification succeeds.
 
-1. Open your Slack app at <https://api.slack.com/apps>.
-2. **Interactivity & Shortcuts** &rarr; turn it on, set Request URL to
-   `https://<your-fly-app>.fly.dev/slack/actions`.
-3. **Basic Information** &rarr; copy the **Signing Secret** into your
-   `.env` / fly secret as `SLACK_SIGNING_SECRET`. Without this, the
-   webhook rejects everything.
-4. Make sure the bot has `chat:write` scope and is invited to the
-   channel `SLACK_CHANNEL_ID` points at.
-5. `fly secrets set SLACK_SIGNING_SECRET=...` and `fly deploy`.
+If verification fails: check `fly logs`, confirm `SLACK_SIGNING_SECRET` is
+set with `fly secrets list`. The webhook returns 401 if the secret is
+unset -- safer than open routes.
 
-If `SLACK_SIGNING_SECRET` is unset, the webhook returns 401 to all
-requests. That's intentional -- safer than open routes.
+### 11. Smoke test
+
+```sh
+fly ssh console
+python -m cupid notify-test
+```
+
+You should get the test SMS, email, and Slack message. Check `fly logs`
+again -- within ~45 seconds you should see polling activity.
+
+### Daily operation
+
+- **Watch from your phone**: bookmark the dashboard URL.
+- **Slot found**: SMS to both phones + email + Slack. If the slot matches
+  your preferred date, the booker books immediately and texts the
+  confirmation number. Otherwise (a fallback date opened) the Slack
+  message has Book/Skip buttons -- click within 90s or it auto-books.
+- **Change preferred date**: edit YAML inline on the dashboard, click
+  **Save and reload**. Next tick uses the new config.
+- **Pause** if you booked manually or want to stop temporarily.
+
+### Common failure modes
+
+- **`fill_skipped` warnings** -- form field label changed; rerun
+  `python -m cupid record` and update `SCHEMA_BY_KIND`.
+- **Slack 401** -- `SLACK_SIGNING_SECRET` mismatch; re-copy and `fly secrets set`.
+- **Twilio "unverified number"** -- trial account; upgrade or add the
+  recipient as a Verified Caller ID.
+- **CAPTCHA hit** -- booker stops at submit and texts a deep link.
+  Click and finalize manually.
+- **Rate-limit / IP block** -- bump `polling.base_interval_seconds` to
+  60-90s. Don't go below 15s.
 
 ## Configuration cheatsheet
 
