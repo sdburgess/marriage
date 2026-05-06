@@ -15,8 +15,8 @@ The original 2021 Go Lambda lives in `legacy/` for reference.
   SPA. Naive HTTP scraping does not work, so we drive a real Chromium via
   Playwright.
 - **Watch:** every ~45 seconds (jittered) we open the ceremony flow, walk to
-  the calendar for each configured borough, and read the available days/times
-  in your date window.
+  the Manhattan calendar, and read the available days/times in your date
+  window.
 - **Notify:** when new slots appear, fan-out alerts go to Twilio SMS, email
   (SMTP), and Slack. SMS to both partners' phones is the recommended primary.
 - **Book:** if `auto_book` is on and a slot matches `preferred_date`, the
@@ -108,7 +108,7 @@ wipe them.
 | key                            | what it does                                         |
 | ------------------------------ | ---------------------------------------------------- |
 | `targets[].kind`               | `ceremony` (most common) or `license`                |
-| `targets[].boroughs`           | list of NYC boroughs to search                       |
+| `targets[].boroughs`           | leave as `[Manhattan]` -- that's the only location we want |
 | `targets[].earliest_date`      | start of search window                               |
 | `targets[].latest_date`        | end of search window                                 |
 | `targets[].preferred_date`     | the date you actually want                           |

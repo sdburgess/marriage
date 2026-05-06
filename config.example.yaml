@@ -8,7 +8,7 @@
 targets:
   - kind: ceremony
     mode: in_person
-    boroughs: [Manhattan]                  # add more boroughs to broaden
+    boroughs: [Manhattan]                  # Manhattan only -- do not add others
     # The watcher considers anything in this window. Even with a preferred
     # date, keep a reasonable window so you also see fallback slots.
     earliest_date: 2026-06-08
