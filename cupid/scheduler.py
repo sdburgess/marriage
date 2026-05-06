@@ -11,6 +11,7 @@ import structlog
 
 from .booker import Booker, BookResult
 from .config import Config, ReleaseWindow, Secrets, Target
+from .controller import Controller
 from .notify import Notice, Notifier
 from .scraper import Scraper, Slot
 from .state import State
@@ -77,10 +78,17 @@ def in_burst_window(cfg: Config, kind: str, now: datetime | None = None) -> bool
 
 
 class Scheduler:
-    def __init__(self, cfg: Config, secrets: Secrets, state: State):
+    def __init__(
+        self,
+        cfg: Config,
+        secrets: Secrets,
+        state: State,
+        controller: Controller | None = None,
+    ):
         self.cfg = cfg
         self.secrets = secrets
         self.state = state
+        self.controller = controller
         self.notifier = Notifier(cfg, secrets)
         self.booker = Booker(cfg, secrets)
 
@@ -88,9 +96,20 @@ class Scheduler:
         log.info("scheduler.start", targets=len(self.cfg.targets))
         while True:
             try:
+                if self.controller and self.controller.paused:
+                    await asyncio.sleep(2)
+                    continue
+                # Pull live config from controller every tick so dashboard
+                # edits take effect without restart.
+                if self.controller:
+                    self.cfg = self.controller.cfg
+                    self.notifier.cfg = self.cfg
+                    self.booker.cfg = self.cfg
                 await self.tick()
             except Exception as e:
                 log.error("scheduler.tick_failed", error=str(e))
+                if self.controller:
+                    self.controller.log_activity("error", f"tick failed: {e}")
             await asyncio.sleep(self._sleep_seconds())
 
     def _sleep_seconds(self) -> int:
@@ -145,11 +164,69 @@ class Scheduler:
         for s in ordered:
             if self.state.already_booked(target.kind):
                 return
-            log.info("scheduler.attempt_book", slot=s.key())
+            decision = await self._await_decision(s, target)
+            if decision == "skip":
+                log.info("scheduler.user_skipped", slot=s.key())
+                continue
+            log.info("scheduler.attempt_book", slot=s.key(), decision=decision)
             result = await self.booker.book(s, target)
             await self._handle_book_result(target, s, result)
             if result.success or result.held_for_human:
                 return
+
+    async def _await_decision(self, slot: Slot, target: Target) -> str:
+        """Return 'book' | 'skip' | 'auto'.
+
+        - 'auto' = no Slack-confirm gate, book immediately
+        - 'book' = a human clicked Book in Slack
+        - 'skip' = a human clicked Skip in Slack; caller should try the
+          next slot (or stop)
+        """
+        # Preferred date always books immediately -- you've already chosen.
+        if target.preferred_date and slot.start.date() == target.preferred_date:
+            return "auto"
+        if not target.slack_confirm:
+            return "auto"
+        if not self.controller:
+            return "auto"
+        if not (self.secrets.slack_bot_token and self.secrets.slack_channel_id):
+            return "auto"
+
+        timeout = self.cfg.server.slack_confirm_timeout_seconds
+        pending = self.controller.register_pending(slot, target, timeout)
+        slot_summary = (
+            f"{target.kind.title()} - {slot.start:%a %b %-d %Y, %-I:%M %p} "
+            f"({slot.borough})"
+        )
+        try:
+            ts = self.notifier.post_slot_decision(
+                callback_id=pending.callback_id,
+                subject=f"New {target.kind} slot found",
+                slot_summary=slot_summary,
+                timeout_seconds=timeout,
+            )
+        except Exception as e:
+            log.warning("scheduler.slack_post_failed", error=str(e))
+            self.controller.resolve_pending(pending.callback_id, "auto")
+            return "auto"
+
+        try:
+            decision = await asyncio.wait_for(pending.decision, timeout=timeout)
+        except asyncio.TimeoutError:
+            self.controller.resolve_pending(pending.callback_id, "timeout")
+            decision = "auto"
+            if ts:
+                self.notifier.update_slack_message(
+                    ts, f":hourglass: Timed out, auto-booking: {slot_summary}"
+                )
+        else:
+            if ts:
+                emoji = ":white_check_mark:" if decision == "book" else ":x:"
+                verb = "Booking" if decision == "book" else "Skipped"
+                self.notifier.update_slack_message(
+                    ts, f"{emoji} {verb}: {slot_summary}"
+                )
+        return decision
 
     def _notify_availability(self, target: Target, slots: list[Slot]) -> None:
         first = slots[0]

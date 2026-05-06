@@ -27,6 +27,13 @@ class Target(BaseModel):
     auto_book: bool = False
     license_number: str = ""
 
+    # If true, before auto-booking, post the slot to Slack with Book/Skip
+    # buttons. If neither is clicked within `slack_confirm_timeout_seconds`
+    # (top-level config), auto-book happens anyway so we don't lose the
+    # slot to a missed phone. If the slot matches preferred_date, this
+    # flag is ignored and we book immediately -- you've already chosen.
+    slack_confirm: bool = False
+
     # Optional. If set, this is your preferred date (e.g., a date that's
     # currently booked by someone else and you're waiting for a cancellation).
     # When found, the booker will go for it before any other matching slot.
@@ -103,11 +110,21 @@ class Polling(BaseModel):
     release_windows: list[ReleaseWindow] = Field(default_factory=list)
 
 
+class Server(BaseModel):
+    """Web dashboard + Slack interactivity webhook host."""
+
+    enabled: bool = True
+    host: str = "0.0.0.0"
+    port: int = 8080
+    slack_confirm_timeout_seconds: int = 90  # auto-book if no Slack response
+
+
 class Config(BaseModel):
     targets: list[Target]
     applicants: Applicants
     notifications: Notifications
     polling: Polling = Polling()
+    server: Server = Server()
 
 
 class Secrets(BaseModel):
@@ -130,6 +147,10 @@ class Secrets(BaseModel):
     cupid_login_password: str = ""
     twocaptcha_api_key: str = ""
 
+    slack_signing_secret: str = ""
+    web_username: str = ""
+    web_password: str = ""
+
     @classmethod
     def from_env(cls) -> "Secrets":
         return cls(
@@ -146,6 +167,9 @@ class Secrets(BaseModel):
             cupid_login_email=os.getenv("CUPID_LOGIN_EMAIL", ""),
             cupid_login_password=os.getenv("CUPID_LOGIN_PASSWORD", ""),
             twocaptcha_api_key=os.getenv("TWOCAPTCHA_API_KEY", ""),
+            slack_signing_secret=os.getenv("SLACK_SIGNING_SECRET", ""),
+            web_username=os.getenv("WEB_USERNAME", ""),
+            web_password=os.getenv("WEB_PASSWORD", ""),
         )
 
 

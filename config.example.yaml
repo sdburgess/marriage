@@ -27,6 +27,12 @@ targets:
 
     auto_book: true
 
+    # If true, non-preferred-date slots get a Slack message with
+    # Book/Skip buttons and wait `server.slack_confirm_timeout_seconds`
+    # before auto-booking anyway. Slots that match preferred_date
+    # always book immediately regardless of this flag.
+    slack_confirm: true
+
     # REQUIRED. The confirmation number from your license appointment.
     license_number: "FILL_ME_IN"
 
@@ -58,3 +64,13 @@ polling:
   jitter_seconds: 10               # +/- 10s random jitter so we're not exactly periodic
   burst_interval_seconds: 5        # only used if constant_mode=false
   release_windows: []              # not used in constant_mode
+
+# Web dashboard + Slack interactivity webhook host
+server:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8080
+  # If a non-preferred slot opens and slack_confirm is true on the target,
+  # we wait this many seconds for someone to click Book or Skip in Slack.
+  # On timeout we auto-book so a missed phone doesn't lose the slot.
+  slack_confirm_timeout_seconds: 90

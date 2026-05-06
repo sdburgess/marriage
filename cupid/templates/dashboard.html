@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>cupid dashboard</title>
+  <meta http-equiv="refresh" content="15">
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; max-width: 980px; margin: 2em auto; padding: 0 1em; color: #222; }
+    header { display: flex; justify-content: space-between; align-items: center; }
+    h1 { margin: 0; font-size: 1.5em; }
+    .status { padding: 0.4em 0.9em; border-radius: 999px; font-weight: 600; font-size: 0.85em; }
+    .running { background: #d4f5d4; color: #1b6b1b; }
+    .paused  { background: #fde2a4; color: #6b4e0c; }
+    section { margin: 1.6em 0; padding: 1em 1.2em; border: 1px solid #e3e3e3; border-radius: 8px; }
+    section h2 { margin: 0 0 0.6em; font-size: 1.05em; color: #555; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+    th, td { text-align: left; padding: 0.4em 0.6em; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+    th { color: #777; font-weight: 600; }
+    code { background: #f4f4f4; padding: 0.05em 0.35em; border-radius: 3px; font-size: 0.9em; }
+    button { padding: 0.5em 1em; border: 1px solid #999; background: #fafafa; cursor: pointer; border-radius: 4px; font-size: 0.9em; }
+    button.primary { background: #2566cf; color: white; border-color: #2566cf; }
+    button.danger  { background: #c42b2b; color: white; border-color: #c42b2b; }
+    textarea { width: 100%; min-height: 380px; font-family: ui-monospace, Menlo, monospace; font-size: 0.85em; padding: 0.6em; box-sizing: border-box; }
+    .muted { color: #888; font-size: 0.85em; }
+    .row { display: flex; gap: 0.6em; flex-wrap: wrap; align-items: center; }
+    .activity { font-size: 0.83em; color: #555; max-height: 280px; overflow: auto; }
+    .activity .err { color: #c42b2b; }
+    .pending { background: #fff8e1; padding: 0.6em 0.8em; border-left: 3px solid #f0b840; margin-bottom: 0.5em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>cupid &mdash; NYC ceremony watcher</h1>
+    {% if paused %}
+      <span class="status paused">PAUSED</span>
+    {% else %}
+      <span class="status running">RUNNING</span>
+    {% endif %}
+  </header>
+
+  <section>
+    <h2>Controls</h2>
+    <div class="row">
+      {% if paused %}
+        <form method="post" action="/resume"><button class="primary" type="submit">Resume</button></form>
+      {% else %}
+        <form method="post" action="/pause"><button class="danger" type="submit">Pause</button></form>
+      {% endif %}
+      <form method="post" action="/reload-config"><button type="submit">Reload config from disk</button></form>
+      <span class="muted">last poll: {{ last_run_at or "never" }} &middot; seen slots: {{ seen_count }}</span>
+    </div>
+  </section>
+
+  {% if pending %}
+  <section>
+    <h2>Awaiting Slack decision</h2>
+    {% for p in pending %}
+      <div class="pending">
+        <strong>{{ p.target.kind }}</strong> &mdash;
+        {{ p.slot.start.strftime("%a %b %-d %Y, %-I:%M %p") }} ({{ p.slot.borough }})
+        <span class="muted">callback {{ p.callback_id }}</span>
+      </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  <section>
+    <h2>Targets</h2>
+    <table>
+      <tr><th>Kind</th><th>Boroughs</th><th>Window</th><th>Preferred</th><th>Auto-book</th><th>Slack confirm</th></tr>
+      {% for t in targets %}
+      <tr>
+        <td>{{ t.kind }} ({{ t.mode }})</td>
+        <td>{{ t.boroughs|join(", ") }}</td>
+        <td>
+          {{ t.earliest_date }} &rarr; {{ t.latest_date }}<br>
+          <span class="muted">{{ t.earliest_time }} &ndash; {{ t.latest_time }}, {{ t.weekdays|join(",") }}</span>
+        </td>
+        <td>
+          {% if t.preferred_date %}
+            <strong>{{ t.preferred_date }}</strong>
+            {% if t.preferred_time %}@ {{ t.preferred_time }}{% endif %}
+            {% if t.preferred_only %}<br><span class="muted">only</span>{% endif %}
+          {% else %}
+            <span class="muted">none</span>
+          {% endif %}
+        </td>
+        <td>{{ "yes" if t.auto_book else "no" }}</td>
+        <td>{{ "yes" if t.slack_confirm else "no" }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="muted">
+      Polling: {{ "constant" if polling.constant_mode else "windowed" }} &middot;
+      every {{ polling.base_interval_seconds }}s &plusmn;{{ polling.jitter_seconds }}s &middot;
+      Slack confirm timeout: {{ server_cfg.slack_confirm_timeout_seconds }}s
+    </p>
+  </section>
+
+  <section>
+    <h2>Bookings</h2>
+    {% if bookings %}
+      <table>
+        <tr><th>Kind</th><th>Date/time</th><th>Confirmation #</th><th>Booked at</th></tr>
+        {% for b in bookings %}
+        <tr>
+          <td>{{ b.kind }}</td>
+          <td>{{ b.datetime }}</td>
+          <td><code>{{ b.confirmation_number }}</code></td>
+          <td>{{ b.booked_at }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    {% else %}
+      <p class="muted">No bookings yet.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Activity</h2>
+    <div class="activity">
+      {% for a in activity %}
+        <div class="{{ 'err' if a.level == 'error' else '' }}">
+          <span class="muted">{{ a.when.strftime("%H:%M:%S") }}</span>
+          [{{ a.level }}]
+          {{ a.message }}
+          {% if a.extra %}<span class="muted">{{ a.extra }}</span>{% endif %}
+        </div>
+      {% else %}
+        <span class="muted">No activity yet.</span>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section>
+    <h2>Edit config.yaml</h2>
+    <p class="muted">
+      Saved YAML is validated before being written. Pause first if you're
+      making big changes &mdash; otherwise the next tick runs against the
+      new config immediately.
+    </p>
+    <form method="post" action="/save-config">
+      <textarea name="config_yaml">{{ config_yaml }}</textarea>
+      <p><button class="primary" type="submit">Save and reload</button></p>
+    </form>
+  </section>
+</body>
+</html>

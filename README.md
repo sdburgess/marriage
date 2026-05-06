@@ -18,10 +18,19 @@ The original 2021 Go Lambda lives in `legacy/` for reference.
   the Manhattan calendar, and read the available days/times in your date
   window.
 - **Notify:** when new slots appear, fan-out alerts go to Twilio SMS, email
-  (SMTP), and Slack. SMS to both partners' phones is the recommended primary.
+  (SMTP), and Slack -- independently. SMS to both partners' phones is the
+  recommended primary.
 - **Book:** if `auto_book` is on and a slot matches `preferred_date`, the
   booker fills the form and submits. If a CAPTCHA blocks submit, it stops at
   the confirmation page and texts you a link to finalize manually.
+- **Slack-confirm (optional):** for slots that don't match `preferred_date`,
+  the Slack message has *Book* / *Skip* buttons. If no one clicks within
+  `server.slack_confirm_timeout_seconds`, we auto-book anyway so a missed
+  phone doesn't lose the slot.
+- **Web dashboard:** every fly.io machine ships a small dashboard at
+  `https://<your-app>.fly.dev/`. It shows status, recent activity, pending
+  Slack confirmations, all bookings, and lets you edit `config.yaml`,
+  pause/resume, or reload from disk. HTTP-basic auth gates it.
 - **State:** `state.json` remembers slots we've already announced (so we
   don't spam) and bookings we've already made (so we don't double-book).
 
@@ -86,7 +95,8 @@ python -m cupid run
 fly launch --no-deploy --copy-config           # accept name "cupid-watcher" or pick your own
 fly volumes create cupid_data --size 1 --region ewr
 
-# Push secrets (env, never committed)
+# Push secrets (env, never committed). Includes WEB_USERNAME/WEB_PASSWORD
+# for the dashboard and SLACK_SIGNING_SECRET for the Slack webhook.
 fly secrets set $(grep -v '^#' .env | xargs)
 
 # Upload your config.yaml into the persistent volume
@@ -99,7 +109,25 @@ fly logs
 ```
 
 State (`state.json`) and `config.yaml` live on the volume so deploys don't
-wipe them.
+wipe them. The dashboard is at `https://<app>.fly.dev/` (basic auth with
+the `WEB_USERNAME` / `WEB_PASSWORD` you set).
+
+### Slack interactivity setup
+
+For Book/Skip buttons to work, the Slack app needs Interactivity enabled:
+
+1. Open your Slack app at <https://api.slack.com/apps>.
+2. **Interactivity & Shortcuts** &rarr; turn it on, set Request URL to
+   `https://<your-fly-app>.fly.dev/slack/actions`.
+3. **Basic Information** &rarr; copy the **Signing Secret** into your
+   `.env` / fly secret as `SLACK_SIGNING_SECRET`. Without this, the
+   webhook rejects everything.
+4. Make sure the bot has `chat:write` scope and is invited to the
+   channel `SLACK_CHANNEL_ID` points at.
+5. `fly secrets set SLACK_SIGNING_SECRET=...` and `fly deploy`.
+
+If `SLACK_SIGNING_SECRET` is unset, the webhook returns 401 to all
+requests. That's intentional -- safer than open routes.
 
 ## Configuration cheatsheet
 
@@ -115,7 +143,10 @@ wipe them.
 | `targets[].preferred_time`     | optional preferred time-of-day                       |
 | `targets[].preferred_only`     | only book preferred_date; never settle for others    |
 | `targets[].auto_book`          | true to actually submit, false for notify-only       |
+| `targets[].slack_confirm`      | gate non-preferred slots on a Slack Book/Skip click  |
 | `targets[].license_number`     | required for ceremony booking                        |
+| `server.enabled`               | run the dashboard + Slack webhook (default true)     |
+| `server.slack_confirm_timeout_seconds` | seconds to wait for Slack click before auto-booking |
 | `polling.constant_mode`        | true for cancellation-watch (default)                |
 | `polling.base_interval_seconds`| seconds between polls (45 is reasonable)             |
 | `polling.jitter_seconds`       | random +/- jitter so we're not exactly periodic      |
@@ -123,8 +154,9 @@ wipe them.
 `.env` / fly secrets:
 
 - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`
-- `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID`
+- `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID`, `SLACK_SIGNING_SECRET`
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`
+- `WEB_USERNAME`, `WEB_PASSWORD` (HTTP basic auth on the dashboard)
 - `TWOCAPTCHA_API_KEY` (optional, only if you want CAPTCHA solving)
 
 ## Honest caveats
@@ -146,16 +178,20 @@ wipe them.
 
 ```
 cupid/
-  __main__.py     # CLI: run / once / notify-test / record
-  config.py       # Pydantic models for config.yaml + env Secrets
-  state.py        # JSON-on-disk: seen slots, recorded bookings
-  notify.py       # Twilio SMS + SMTP + Slack fan-out
-  scraper.py      # Playwright reader of clerkscheduler (SELECTORS dict)
-  booker.py       # Form-driver, CAPTCHA fallback (SCHEMA_BY_KIND dict)
-  scheduler.py    # Main loop, preferred-date priority, polling cadence
-Dockerfile        # Playwright base image
-fly.toml          # fly.io machine + volume
+  __main__.py            # CLI: run / once / serve / notify-test / record
+  config.py              # Pydantic models for config.yaml + env Secrets
+  controller.py          # Shared state: pause flag, pending Slack confirmations
+  state.py               # JSON-on-disk: seen slots, recorded bookings
+  notify.py              # Twilio SMS + SMTP + Slack fan-out (incl. Book/Skip buttons)
+  scraper.py             # Playwright reader of clerkscheduler (SELECTORS dict)
+  booker.py              # Form-driver, CAPTCHA fallback (SCHEMA_BY_KIND dict)
+  scheduler.py           # Main loop, preferred-date priority, polling cadence
+  server.py              # FastAPI dashboard + /slack/actions webhook
+  templates/
+    dashboard.html       # single-page Jinja dashboard
+Dockerfile               # Playwright base image
+fly.toml                 # fly.io machine + volume + http_service
 config.example.yaml
 .env.example
-legacy/           # the original Go Lambda
+legacy/                  # the original Go Lambda
 ```

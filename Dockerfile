@@ -17,4 +17,7 @@ COPY cupid ./cupid
 # /data is mounted as a volume on fly.io so state.json + config.yaml persist
 VOLUME ["/data"]
 
+# FastAPI dashboard + Slack webhook listen here; fly.io proxies HTTPS to it.
+EXPOSE 8080
+
 CMD ["python", "-m", "cupid", "run"]

@@ -9,6 +9,9 @@ primary_region = "ewr"   # Newark -- close to NYC, low latency to city site
   CONFIG_PATH = "/data/config.yaml"
   STATE_PATH  = "/data/state.json"
   LOG_LEVEL   = "INFO"
+  # Internal port the FastAPI server binds to. fly.io terminates TLS
+  # and proxies to this port.
+  PORT        = "8080"
 
 # Persistent volume so state.json (booked confirmations, seen slots) and
 # the user-edited config.yaml survive deploys and restarts.
@@ -16,8 +19,20 @@ primary_region = "ewr"   # Newark -- close to NYC, low latency to city site
   source      = "cupid_data"
   destination = "/data"
 
-# This is a long-running worker, not an HTTP service. Keep one instance
-# running, no auto-stop, no auto-scale.
+# Expose the dashboard + Slack webhook over HTTPS. fly.io issues a
+# certificate for <app>.fly.dev automatically.
+[http_service]
+  internal_port      = 8080
+  force_https        = true
+  auto_stop_machines = false        # never sleep -- we are watching
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 50
+    soft_limit = 25
+
 [[vm]]
   cpu_kind = "shared"
   cpus     = 1
@@ -25,5 +40,3 @@ primary_region = "ewr"   # Newark -- close to NYC, low latency to city site
 
 [deploy]
   strategy = "immediate"
-
-# No [[services]] block on purpose -- we don't expose any port.

@@ -8,6 +8,7 @@ import smtplib
 import structlog
 from dataclasses import dataclass
 from email.message import EmailMessage
+from typing import Any
 
 import httpx
 
@@ -93,3 +94,102 @@ class Notifier:
         if not r.json().get("ok"):
             raise RuntimeError(f"slack: {r.text}")
         log.info("notify.slack_sent")
+
+    # ---- Slack interactive: post Book/Skip message ----
+    def post_slot_decision(
+        self,
+        *,
+        callback_id: str,
+        subject: str,
+        slot_summary: str,
+        timeout_seconds: int,
+    ) -> str | None:
+        """Post a Slack message with Book/Skip buttons. Returns the
+        message ts (so we can edit it after the decision), or None if
+        Slack isn't configured."""
+        s = self.secrets
+        if not s.slack_bot_token or not s.slack_channel_id:
+            return None
+        blocks = _slot_decision_blocks(
+            callback_id=callback_id,
+            subject=subject,
+            slot_summary=slot_summary,
+            timeout_seconds=timeout_seconds,
+        )
+        r = httpx.post(
+            "https://slack.com/api/chat.postMessage",
+            headers={"Authorization": f"Bearer {s.slack_bot_token}"},
+            json={
+                "channel": s.slack_channel_id,
+                "text": subject,
+                "blocks": blocks,
+            },
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"slack: {r.text}")
+        return data.get("ts")
+
+    def update_slack_message(self, ts: str, text: str) -> None:
+        s = self.secrets
+        if not s.slack_bot_token or not s.slack_channel_id or not ts:
+            return
+        try:
+            httpx.post(
+                "https://slack.com/api/chat.update",
+                headers={"Authorization": f"Bearer {s.slack_bot_token}"},
+                json={
+                    "channel": s.slack_channel_id,
+                    "ts": ts,
+                    "text": text,
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": text},
+                        }
+                    ],
+                },
+                timeout=10,
+            )
+        except Exception as e:
+            log.warning("notify.slack_update_failed", error=str(e))
+
+
+def _slot_decision_blocks(
+    *,
+    callback_id: str,
+    subject: str,
+    slot_summary: str,
+    timeout_seconds: int,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*{subject}*\n{slot_summary}\n_auto-booking in {timeout_seconds}s if no one clicks_",
+            },
+        },
+        {
+            "type": "actions",
+            "block_id": f"slot_decision:{callback_id}",
+            "elements": [
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "text": {"type": "plain_text", "text": "Book it"},
+                    "action_id": "book",
+                    "value": callback_id,
+                },
+                {
+                    "type": "button",
+                    "style": "danger",
+                    "text": {"type": "plain_text", "text": "Skip"},
+                    "action_id": "skip",
+                    "value": callback_id,
+                },
+            ],
+        },
+    ]
